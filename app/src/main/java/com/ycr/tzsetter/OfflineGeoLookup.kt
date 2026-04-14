@@ -3,7 +3,6 @@ package com.ycr.tzsetter
 import android.content.Context
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.util.zip.GZIPInputStream
 
 /**
  * 离线邮编 → 经纬度查询器。
@@ -30,16 +29,15 @@ object OfflineGeoLookup {
     @Synchronized
     fun ensureLoaded(context: Context) {
         if (usMap != null) return
-        usMap = loadCompressed(context, "us_geo.csv.gz")
-        caMap = loadCompressed(context, "ca_geo.csv.gz")
+        usMap = loadCompressed(context, "us_geo.csv")
+        caMap = loadCompressed(context, "ca_geo.csv")
     }
 
     private fun loadCompressed(context: Context, assetName: String): Map<String, GeoEntry> {
         val map = HashMap<String, GeoEntry>(50_000)
         context.assets.open(assetName).use { input ->
-            GZIPInputStream(input).use { gz ->
-                BufferedReader(InputStreamReader(gz, Charsets.UTF_8)).use { reader ->
-                    reader.forEachLine { line ->
+            BufferedReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
+                reader.forEachLine { line ->
                         val parts = line.split("|")
                         if (parts.size >= 5) {
                             val zip = parts[0]
@@ -52,7 +50,6 @@ object OfflineGeoLookup {
                     }
                 }
             }
-        }
         return map
     }
 
