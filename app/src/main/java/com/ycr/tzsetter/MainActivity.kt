@@ -13,13 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +26,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,44 +39,55 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ZipTimezoneLookup.ensureLoaded(applicationContext)
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    primary = Color(0xFF1E5EFF),
-                    onPrimary = Color.White,
-                    surface = Color(0xFFF7F8FA),
-                    background = Color(0xFFF7F8FA),
-                )
-            ) { AppScreen() }
+            MaterialTheme(colorScheme = lightColorScheme(
+                primary = Color(0xFF1E5EFF),
+                onPrimary = Color.White,
+                surface = Color(0xFFF7F8FA),
+                background = Color(0xFFF7F8FA),
+            )) { AppScreen() }
         }
     }
 }
+
+/** UI 层合并结果 */
+data class CombinedResult(
+    val tz: ZipTimezoneLookup.LookupResult,
+    val geo: NetworkDataSource.PlaceInfo?,
+    val geoError: String? = null,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScreen() {
     val context = LocalContext.current
-    var zipInput by remember { mutableStateOf("") }
-    var result by remember { mutableStateOf<ZipTimezoneLookup.LookupResult?>(null) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-    var lastApplyResult by remember { mutableStateOf<SystemTimezoneSetter.Result?>(null) }
-    var authMode by remember { mutableStateOf(SystemTimezoneSetter.getAuthMode(context)) }
-    var showGuide by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
+    var zipInput by remember { mutableStateOf("") }
+    var combined by remember { mutableStateOf<CombinedResult?>(null) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var tzApplyResult by remember { mutableStateOf<SystemTimezoneSetter.Result?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var authMode by remember { mutableStateOf(SystemTimezoneSetter.getAuthMode(context)) }
+    var mockStatus by remember { mutableStateOf(MockLocationController.getStatus(context)) }
+    var mockRunning by remember { mutableStateOf(MockLocationService.isRunning) }
+    var showAuthGuide by remember { mutableStateOf(false) }
+    var showMockGuide by remember { mutableStateOf(false) }
+
+    // 定时刷新状态
     LaunchedEffect(Unit) {
         while (true) {
             authMode = SystemTimezoneSetter.getAuthMode(context)
-            kotlinx.coroutines.delay(2000)
+            mockStatus = MockLocationController.getStatus(context)
+            mockRunning = MockLocationService.isRunning
+            kotlinx.coroutines.delay(1500)
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("时区助手", fontWeight = FontWeight.Bold) },
+                title = { Text("时区 + 定位助手", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
-                actions = {
-                    TextButton(onClick = { showGuide = true }) { Text("授权设置") }
-                }
             )
         }
     ) { padding ->
@@ -89,104 +97,222 @@ fun AppScreen() {
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            AuthStatusCard(authMode, onShowGuide = { showGuide = true })
+            // 两个状态卡片并排或叠放
+            AuthStatusCard(authMode) { showAuthGuide = true }
+            MockStatusCard(mockStatus, mockRunning) { showMockGuide = true }
 
             ZipInputCard(
                 zipInput = zipInput,
+                isLoading = isLoading,
                 onZipChange = {
                     zipInput = it
                     errorMsg = null
-                    lastApplyResult = null
+                    tzApplyResult = null
                 },
                 onQuery = {
-                    val r = ZipTimezoneLookup.lookup(context, zipInput)
-                    if (r == null) {
-                        result = null
-                        errorMsg = "无法识别这个邮编。美国 5 位数字（如 97058），加拿大 6 位 FSA（如 M5V3L9）"
-                    } else {
-                        result = r
-                        errorMsg = null
+                    // 1. 本地查时区
+                    val tz = ZipTimezoneLookup.lookup(context, zipInput)
+                    if (tz == null) {
+                        combined = null
+                        errorMsg = "无法识别邮编。US 用 5 位数字（如 97058），CA 用 6 位 FSA（如 M5V3L9）"
+                        return@ZipInputCard
                     }
-                    lastApplyResult = null
+                    errorMsg = null
+                    combined = CombinedResult(tz, null)
+                    tzApplyResult = null
+
+                    // 2. 异步查经纬度（缓存优先）
+                    isLoading = true
+                    scope.launch {
+                        val countryCode =
+                            if (tz.country == ZipTimezoneLookup.Country.US) "us" else "ca"
+                        val queryZip = if (tz.country == ZipTimezoneLookup.Country.US)
+                            tz.normalized.take(5)
+                        else
+                            tz.normalized.take(3)
+
+                        // 缓存
+                        val cached = LocationCache.get(context, countryCode, queryZip)
+                        if (cached != null) {
+                            combined = combined?.copy(geo = cached)
+                            isLoading = false
+                            return@launch
+                        }
+                        // 网络
+                        val fetched = try {
+                            withContext(Dispatchers.IO) {
+                                NetworkDataSource.fetch(countryCode, queryZip)
+                            }
+                        } catch (e: Exception) {
+                            null
+                        }
+                        if (fetched != null) {
+                            LocationCache.put(context, countryCode, queryZip, fetched)
+                            combined = combined?.copy(geo = fetched)
+                        } else {
+                            combined = combined?.copy(
+                                geoError = "未查到经纬度（API 返回空或断网）。时区仍可使用。"
+                            )
+                        }
+                        isLoading = false
+                    }
                 }
             )
 
             errorMsg?.let { ErrorCard(it) }
 
-            result?.let { r ->
+            combined?.let { r ->
                 ResultCard(
-                    result = r,
-                    onApply = {
-                        lastApplyResult = SystemTimezoneSetter.setSystemTimezone(context, r.timezoneId)
-                        authMode = SystemTimezoneSetter.getAuthMode(context)
+                    combined = r,
+                    isLoading = isLoading,
+                    mockRunning = mockRunning,
+                    onApplyTz = {
+                        tzApplyResult = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
                     },
-                    onOpenSettings = { SystemTimezoneSetter.openDateSettings(context) },
+                    onApplyMock = {
+                        r.geo?.let { g ->
+                            MockLocationController.startMock(
+                                context, g.latitude, g.longitude,
+                                "${g.placeName}, ${g.stateAbbrev} ${g.zip}"
+                            )
+                        }
+                    },
+                    onApplyBoth = {
+                        tzApplyResult = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
+                        r.geo?.let { g ->
+                            MockLocationController.startMock(
+                                context, g.latitude, g.longitude,
+                                "${g.placeName}, ${g.stateAbbrev} ${g.zip}"
+                            )
+                        }
+                    },
+                    onStopMock = { MockLocationController.stopMock(context) },
+                    onOpenDateSettings = { SystemTimezoneSetter.openDateSettings(context) },
                 )
-                lastApplyResult?.let { applyRes ->
-                    ApplyResultCard(applyRes, onShowGuide = { showGuide = true })
-                }
+                tzApplyResult?.let { TzApplyResultCard(it) { showAuthGuide = true } }
             }
 
-            Spacer(Modifier.height(32.dp))
-            FooterText()
+            Spacer(Modifier.height(24.dp))
+            FooterText(context)
         }
     }
 
-    if (showGuide) {
-        AuthGuideDialog(authMode = authMode, onDismiss = { showGuide = false })
-    }
+    if (showAuthGuide) AuthGuideDialog { showAuthGuide = false }
+    if (showMockGuide) MockGuideDialog(context) { showMockGuide = false }
 }
 
+// ====================================================================
+// 状态卡片
+// ====================================================================
+
 @Composable
-fun AuthStatusCard(mode: SystemTimezoneSetter.AuthMode, onShowGuide: () -> Unit) {
-    val (bg, fg, icon, title, subtitle) = when (mode) {
-        SystemTimezoneSetter.AuthMode.DEVICE_OWNER -> Tuple5(
+fun AuthStatusCard(mode: SystemTimezoneSetter.AuthMode, onClick: () -> Unit) {
+    val (bg, fg, title, sub) = when (mode) {
+        SystemTimezoneSetter.AuthMode.DEVICE_OWNER -> Quad(
             Color(0xFFE8F5E9), Color(0xFF1B5E20),
-            Icons.Default.Security, "✓ 设备管理员模式",
-            "已注册为 Device Owner，修改时区将直接生效"
+            "✓ 时区：设备管理员模式",
+            "可直接修改系统时区"
         )
-        SystemTimezoneSetter.AuthMode.NORMAL_PERMISSION -> Tuple5(
+        SystemTimezoneSetter.AuthMode.NORMAL_PERMISSION -> Quad(
             Color(0xFFE3F2FD), Color(0xFF0D47A1),
-            Icons.Default.CheckCircle, "已授权（普通模式）",
-            "可尝试直接修改系统时区"
+            "时区：普通权限模式",
+            "可尝试修改系统时区"
         )
-        SystemTimezoneSetter.AuthMode.NONE -> Tuple5(
+        SystemTimezoneSetter.AuthMode.NONE -> Quad(
             Color(0xFFFFF3E0), Color(0xFFE65100),
-            Icons.Default.Warning, "未授权",
-            "需要通过 ADB 配置一次，点右边查看方法"
+            "时区：未授权",
+            "需要 ADB 配置一次"
         )
     }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = bg)
     ) {
         Row(
-            Modifier.padding(16.dp),
+            Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(icon, null, tint = fg, modifier = Modifier.size(32.dp))
+            Icon(Icons.Default.Schedule, null, tint = fg, modifier = Modifier.size(28.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold, color = fg)
-                Text(subtitle, fontSize = 13.sp, color = fg)
+                Text(title, fontWeight = FontWeight.Bold, color = fg, fontSize = 14.sp)
+                Text(sub, fontSize = 12.sp, color = fg)
             }
             if (mode != SystemTimezoneSetter.AuthMode.DEVICE_OWNER) {
-                TextButton(onClick = onShowGuide) { Text("设置", color = fg) }
+                TextButton(onClick = onClick) { Text("设置", color = fg) }
             }
         }
     }
 }
 
-private data class Tuple5<A, B, C, D, E>(
-    val a: A, val b: B, val c: C, val d: D, val e: E
-)
+@Composable
+fun MockStatusCard(
+    status: MockLocationController.Status,
+    running: Boolean,
+    onClick: () -> Unit
+) {
+    val (bg, fg, title, sub) = when {
+        running -> Quad(
+            Color(0xFFE8F5E9), Color(0xFF1B5E20),
+            "📍 定位：正在模拟 (${MockLocationService.currentLabel})",
+            "已注入到 GPS / NETWORK / FUSED"
+        )
+        status == MockLocationController.Status.READY -> Quad(
+            Color(0xFFE3F2FD), Color(0xFF0D47A1),
+            "定位：已就绪",
+            "查询邮编后可一键开启模拟定位"
+        )
+        status == MockLocationController.Status.NOT_SELECTED -> Quad(
+            Color(0xFFFFF3E0), Color(0xFFE65100),
+            "定位：需要设置",
+            "开发者选项里选本 app 为模拟位置应用"
+        )
+        else -> Quad(
+            Color(0xFFFFF3E0), Color(0xFFE65100),
+            "定位：开发者选项未开启",
+            "需要先启用开发者选项"
+        )
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = bg)
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                if (running) Icons.Default.MyLocation else Icons.Default.LocationOn,
+                null, tint = fg, modifier = Modifier.size(28.dp)
+            )
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold, color = fg, fontSize = 14.sp)
+                Text(sub, fontSize = 12.sp, color = fg)
+            }
+            if (status != MockLocationController.Status.READY) {
+                TextButton(onClick = onClick) { Text("设置", color = fg) }
+            }
+        }
+    }
+}
+
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+
+// ====================================================================
+// 输入 & 结果
+// ====================================================================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ZipInputCard(zipInput: String, onZipChange: (String) -> Unit, onQuery: () -> Unit) {
+fun ZipInputCard(
+    zipInput: String,
+    isLoading: Boolean,
+    onZipChange: (String) -> Unit,
+    onQuery: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White)
@@ -206,10 +332,19 @@ fun ZipInputCard(zipInput: String, onZipChange: (String) -> Unit, onQuery: () ->
             )
             Button(
                 onClick = onQuery,
-                enabled = zipInput.isNotBlank(),
+                enabled = zipInput.isNotBlank() && !isLoading,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(10.dp)
-            ) { Text("查询时区", modifier = Modifier.padding(vertical = 4.dp)) }
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.White, strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text("查询时区 & 定位", modifier = Modifier.padding(vertical = 4.dp))
+            }
         }
     }
 }
@@ -230,15 +365,22 @@ fun ErrorCard(msg: String) {
 
 @Composable
 fun ResultCard(
-    result: ZipTimezoneLookup.LookupResult,
-    onApply: () -> Unit,
-    onOpenSettings: () -> Unit,
+    combined: CombinedResult,
+    isLoading: Boolean,
+    mockRunning: Boolean,
+    onApplyTz: () -> Unit,
+    onApplyMock: () -> Unit,
+    onApplyBoth: () -> Unit,
+    onStopMock: () -> Unit,
+    onOpenDateSettings: () -> Unit,
 ) {
+    val tz = combined.tz
+    val geo = combined.geo
     var nowStr by remember { mutableStateOf("") }
-    LaunchedEffect(result.timezoneId) {
+    LaunchedEffect(tz.timezoneId) {
         while (true) {
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone(result.timezoneId)
+                timeZone = TimeZone.getTimeZone(tz.timezoneId)
             }
             nowStr = sdf.format(Date())
             kotlinx.coroutines.delay(1000)
@@ -246,7 +388,7 @@ fun ResultCard(
     }
 
     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -255,51 +397,104 @@ fun ResultCard(
                 Text("查询结果", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (result.country == ZipTimezoneLookup.Country.US) "🇺🇸 US" else "🇨🇦 CA",
+                    if (tz.country == ZipTimezoneLookup.Country.US) "🇺🇸 US" else "🇨🇦 CA",
                     fontSize = 13.sp, color = Color.Gray
                 )
             }
-            InfoRow("邮编", result.zipInput)
-            InfoRow("时区 ID", result.timezoneId, mono = true)
-            InfoRow("当前偏移", result.offsetDisplay, mono = true)
+
+            InfoRow("邮编", tz.zipInput)
+            InfoRow("时区", tz.timezoneId, mono = true)
+            InfoRow("偏移", tz.offsetDisplay, mono = true)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    Icons.Default.Schedule, null,
-                    tint = Color(0xFF666666), modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    "当地时间 $nowStr",
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF444444)
-                )
+                Icon(Icons.Default.Schedule, null, tint = Color(0xFF666666),
+                    modifier = Modifier.size(16.dp))
+                Text("当地时间 $nowStr", fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace, color = Color(0xFF444444))
             }
-            if (result.country == ZipTimezoneLookup.Country.US && !result.matchedPrecise) {
-                Text(
-                    "ℹ️ 基于 ZIP3 匹配。跨时区州建议输入完整 5 位邮编。",
-                    fontSize = 12.sp, color = Color.Gray
-                )
+
+            // 地理信息
+            when {
+                geo != null -> {
+                    Divider(Modifier.padding(vertical = 4.dp))
+                    InfoRow("城市", "${geo.placeName}, ${geo.stateAbbrev}")
+                    InfoRow("州/省", geo.state)
+                    InfoRow("坐标",
+                        "%.4f°, %.4f°".format(geo.latitude, geo.longitude),
+                        mono = true)
+                }
+                isLoading -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp), strokeWidth = 2.dp
+                        )
+                        Text("正在查询经纬度...", fontSize = 12.sp, color = Color.Gray)
+                    }
+                }
+                combined.geoError != null -> {
+                    Text("⚠️ ${combined.geoError}", fontSize = 12.sp, color = Color(0xFFE65100))
+                }
             }
 
             Divider(Modifier.padding(vertical = 4.dp))
 
-            Button(
-                onClick = onApply,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("自动设置为系统时区", modifier = Modifier.padding(vertical = 4.dp))
+            // 操作按钮
+            if (geo != null) {
+                // 一键两个一起
+                Button(
+                    onClick = onApplyBoth,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                ) {
+                    Icon(Icons.Default.FlashOn, null,
+                        modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("一键：时区 + 定位",
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        fontWeight = FontWeight.Bold)
+                }
             }
-            OutlinedButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("打开系统设置（手动）", modifier = Modifier.padding(vertical = 4.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onApplyTz,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) { Text("仅设时区", fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 2.dp)) }
+
+                if (mockRunning) {
+                    OutlinedButton(
+                        onClick = onStopMock,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFD32F2F)
+                        )
+                    ) { Text("停止定位", fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 2.dp)) }
+                } else {
+                    Button(
+                        onClick = onApplyMock,
+                        enabled = geo != null,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
+                    ) { Text("仅设定位", fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 2.dp)) }
+                }
             }
+
+            TextButton(
+                onClick = onOpenDateSettings,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("打开系统日期设置（手动）", fontSize = 12.sp) }
         }
     }
 }
@@ -307,128 +502,126 @@ fun ResultCard(
 @Composable
 fun InfoRow(label: String, value: String, mono: Boolean = false) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, color = Color.Gray, fontSize = 14.sp, modifier = Modifier.width(72.dp))
+        Text(label, color = Color.Gray, fontSize = 13.sp, modifier = Modifier.width(60.dp))
         Text(
-            value, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            value, fontSize = 13.sp, fontWeight = FontWeight.Medium,
             fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default
         )
     }
 }
 
 @Composable
-fun ApplyResultCard(result: SystemTimezoneSetter.Result, onShowGuide: () -> Unit) {
+fun TzApplyResultCard(result: SystemTimezoneSetter.Result, onShowGuide: () -> Unit) {
     when (result) {
         is SystemTimezoneSetter.Result.Success -> {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
-                Row(
-                    Modifier.padding(16.dp),
+                Row(Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF2E7D32))
                     Column {
                         Text("✓ 系统时区已更新",
                             fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
-                        Text(result.tzId, fontSize = 13.sp,
-                            color = Color(0xFF2E7D32), fontFamily = FontFamily.Monospace)
-                        Text("via ${result.via}", fontSize = 11.sp, color = Color(0xFF558B2F))
+                        Text("${result.tzId}  (via ${result.via})",
+                            fontSize = 11.sp, color = Color(0xFF558B2F),
+                            fontFamily = FontFamily.Monospace)
                     }
                 }
             }
         }
         is SystemTimezoneSetter.Result.PermissionDenied -> {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(Icons.Default.Warning, null, tint = Color(0xFFE65100))
-                        Text("未授权，无法自动设置",
-                            fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
-                    }
-                    Text("你的 ROM 需要 Device Owner 模式才能改时区。点下方按钮查看方法。",
-                        fontSize = 13.sp, color = Color(0xFF5D4037))
-                    Button(
-                        onClick = onShowGuide,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("未授权，无法改时区",
+                        fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
+                    Button(onClick = onShowGuide,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                        shape = RoundedCornerShape(10.dp)
                     ) { Text("查看授权方法") }
                 }
             }
         }
         is SystemTimezoneSetter.Result.Error -> {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
-                Row(
-                    Modifier.padding(16.dp),
+                Row(Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Default.Error, null, tint = Color(0xFFC62828))
-                    Text("设置失败：${result.message}", color = Color(0xFFC62828))
+                    Text("失败：${result.message}", color = Color(0xFFC62828))
                 }
             }
         }
     }
 }
 
+// ====================================================================
+// 指南弹窗
+// ====================================================================
+
 @Composable
-fun AuthGuideDialog(
-    authMode: SystemTimezoneSetter.AuthMode,
-    onDismiss: () -> Unit
-) {
+fun AuthGuideDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("ADB 授权（一次性）", fontWeight = FontWeight.Bold) },
+        title = { Text("时区授权（ADB 一次性）", fontWeight = FontWeight.Bold) },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text("方案一：Device Owner（推荐，全自动）",
-                    fontWeight = FontWeight.Bold, color = Color(0xFF1E5EFF), fontSize = 14.sp)
-                Text("适用于所有 Android 版本和 ROM，包括 Android 10 上权限被提升的情况。",
-                    fontSize = 12.sp, color = Color(0xFF555555))
-
-                StepText("1", "清除所有账户",
-                    "设置 → 账户 → 移除所有账户（Google、三星、小米、华为等）\n" +
-                    "⚠️ 这一步必做，只要有一个账户就会失败")
-                StepText("2", "开启 USB 调试",
-                    "设置 → 开发者选项 → USB 调试 → 允许")
-                StepText("3", "电脑连接手机，执行命令",
-                    "把下面命令粘贴到 ADB 终端执行：")
-
+            Column(Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("方案一：Device Owner（推荐）",
+                    fontWeight = FontWeight.Bold, color = Color(0xFF1E5EFF))
+                StepText("1", "清除所有账户", "设置 → 账户 → 移除全部")
+                StepText("2", "开启 USB 调试", "开发者选项 → USB 调试")
+                StepText("3", "电脑 ADB 执行命令", "")
                 CopyableCommand(SystemTimezoneSetter.deviceOwnerCommand, context)
 
-                StepText("4", "成功标志",
-                    "命令执行后无报错，且看到 `Success: Device owner set to ...`。\n" +
-                    "回到本 app，顶部变绿「✓ 设备管理员模式」即完成。")
-
                 Spacer(Modifier.height(8.dp))
-
-                Text("方案二：普通权限（仅部分 ROM 可用）",
-                    fontWeight = FontWeight.Bold, color = Color(0xFF546E7A), fontSize = 14.sp)
-                Text("若上面方案不方便，可先试：", fontSize = 12.sp, color = Color(0xFF555555))
+                Text("方案二：普通权限（部分 ROM）",
+                    fontWeight = FontWeight.Bold, color = Color(0xFF546E7A))
                 CopyableCommand(SystemTimezoneSetter.grantPermissionCommand, context)
-                Text("在部分 Android 10/11 ROM 上这条命令会提示 not a changeable permission type，" +
-                    "这种情况必须用方案一。",
-                    fontSize = 11.sp, color = Color(0xFF999999))
-
-                Spacer(Modifier.height(8.dp))
-                Text("💡 常见问题",
-                    fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1E5EFF))
-                Text("· Device Owner 命令失败且提示 has already been provisioned：\n" +
-                        "  账户未清完全，检查所有账户（含 Google 账户、厂商账户）",
-                    fontSize = 12.sp, color = Color.Gray)
-                Text("· 设为 Device Owner 后要撤销：\n" +
-                        "  adb shell dpm remove-active-admin ${SystemTimezoneSetter.ADMIN_COMPONENT}",
-                    fontSize = 12.sp, color = Color.Gray)
-                Text("· 卸载本 app 会自动解除 Device Owner",
-                    fontSize = 12.sp, color = Color.Gray)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("我知道了") } }
+    )
+}
+
+@Composable
+fun MockGuideDialog(context: Context, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("模拟定位设置", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("模拟定位需要把本 app 设为「模拟位置应用」：",
+                    fontSize = 13.sp, color = Color(0xFF555555))
+                StepText("1", "开启开发者选项",
+                    "设置 → 关于手机 → 连点版本号 7 次")
+                StepText("2", "选择模拟位置应用",
+                    "开发者选项 → 找到「选择模拟位置应用」 → 选择「时区助手」")
+                StepText("3", "返回本 app", "定位状态会变成「已就绪」")
+
+                Spacer(Modifier.height(8.dp))
+                Text("或用 ADB 命令（已 Device Owner 的设备）：",
+                    fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                CopyableCommand(MockLocationController.adbSetMockCommand, context)
+
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = { MockLocationController.openDevSettings(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) { Text("打开开发者选项") }
+
+                Spacer(Modifier.height(6.dp))
+                Text("💡 成功率说明",
+                    fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF1E5EFF))
+                Text("· 普通 app 基本都能骗过\n" +
+                    "· 检测「开发者选项开关」的 app 会识破（如某些政务、打车、反作弊 app）\n" +
+                    "· 成功率和 Lexa Fake GPS、狐影等同类 app 相同",
+                    fontSize = 12.sp, color = Color.Gray)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("好的") } }
     )
 }
 
@@ -439,20 +632,14 @@ fun CopyableCommand(cmd: String, context: Context) {
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            Modifier.padding(12.dp),
+        Row(Modifier.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                cmd, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
-                color = Color(0xFF9ECE6A), modifier = Modifier.weight(1f)
-            )
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(cmd, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                color = Color(0xFF9ECE6A), modifier = Modifier.weight(1f))
             IconButton(onClick = { copyToClipboard(context, cmd) }) {
-                Icon(
-                    Icons.Default.ContentCopy, "复制",
-                    tint = Color(0xFFB0BEC5), modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.ContentCopy, "复制",
+                    tint = Color(0xFFB0BEC5), modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -461,32 +648,28 @@ fun CopyableCommand(cmd: String, context: Context) {
 @Composable
 fun StepText(num: String, title: String, detail: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Surface(
-            color = Color(0xFF1E5EFF),
-            shape = CircleShape,
-            modifier = Modifier.size(24.dp)
-        ) {
+        Surface(color = Color(0xFF1E5EFF), shape = CircleShape,
+            modifier = Modifier.size(22.dp)) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Text(num, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(num, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
         Column {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(detail, fontSize = 12.sp, color = Color(0xFF555555))
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            if (detail.isNotEmpty()) {
+                Text(detail, fontSize = 11.sp, color = Color(0xFF555555))
+            }
         }
     }
 }
 
 @Composable
-fun FooterText() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth()
-    ) {
+fun FooterText(context: Context) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()) {
         Text("📍 ${SystemTimezoneSetter.deviceInfo()}",
             fontSize = 11.sp, color = Color.Gray)
-        Spacer(Modifier.height(4.dp))
-        Text("数据基于 IANA tzdata + USPS/CanadaPost 邮编分配规则",
+        Text("v3 · 时区离线 · 定位API+缓存 (${LocationCache.size(context)} 条)",
             fontSize = 11.sp, color = Color.Gray)
     }
 }
