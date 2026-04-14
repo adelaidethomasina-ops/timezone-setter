@@ -3,17 +3,15 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      SET_TIME_ZONE 是 signature|privileged 权限。
-      普通 app 无法直接获得，但可以通过 ADB 授权：
-        adb shell pm grant com.ycr.tzsetter android.permission.SET_TIME_ZONE
-      授权后永久有效（除非卸载）。
+      SET_TIME_ZONE 权限（normal 级别，安装即得）。
+      在部分厂商 ROM 上被升级为 privileged，此时依赖 Device Owner 身份绕过。
     -->
     <uses-permission
         android:name="android.permission.SET_TIME_ZONE"
         tools:ignore="ProtectedPermissions" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
@@ -30,5 +28,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Device Admin Receiver：启用后本 app 可通过 ADB 注册为 Device Owner，
+          从而拿到改系统时区的特权。注册命令：
+            adb shell dpm set-device-owner com.ycr.tzsetter/.TimezoneAdminReceiver
+          要求：手机上没有任何账户（先删除三星账户/Google 账户等）。
+        -->
+        <receiver
+            android:name=".TimezoneAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
