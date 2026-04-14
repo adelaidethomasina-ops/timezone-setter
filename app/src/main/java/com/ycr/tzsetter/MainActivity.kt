@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ZipTimezoneLookup.ensureLoaded(applicationContext)
+        OfflineGeoLookup.ensureLoaded(applicationContext)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(
                 primary = Color(0xFF1E5EFF),
@@ -133,14 +134,32 @@ fun AppScreen() {
                         else
                             tz.normalized.take(3)
 
-                        // 缓存
+                        // 1. 离线数据（优先，瞬间返回）
+                        val offline = OfflineGeoLookup.lookup(context, countryCode, queryZip)
+                        if (offline != null) {
+                            val info = NetworkDataSource.PlaceInfo(
+                                zip = offline.zip,
+                                country = countryCode.uppercase(),
+                                placeName = offline.city,
+                                state = offline.stateAbbrev,
+                                stateAbbrev = offline.stateAbbrev,
+                                latitude = offline.latitude,
+                                longitude = offline.longitude,
+                            )
+                            combined = combined?.copy(geo = info)
+                            isLoading = false
+                            return@launch
+                        }
+
+                        // 2. 本地缓存（上次通过网络查过）
                         val cached = LocationCache.get(context, countryCode, queryZip)
                         if (cached != null) {
                             combined = combined?.copy(geo = cached)
                             isLoading = false
                             return@launch
                         }
-                        // 网络
+
+                        // 3. 网络兜底（本地数据覆盖率 99%+，这里基本不会触发）
                         val fetched = try {
                             withContext(Dispatchers.IO) {
                                 NetworkDataSource.fetch(countryCode, queryZip)
@@ -153,7 +172,7 @@ fun AppScreen() {
                             combined = combined?.copy(geo = fetched)
                         } else {
                             combined = combined?.copy(
-                                geoError = "未查到经纬度（API 返回空或断网）。时区仍可使用。"
+                                geoError = "未查到经纬度。时区仍可使用。"
                             )
                         }
                         isLoading = false
@@ -672,7 +691,7 @@ fun FooterText(context: Context) {
         modifier = Modifier.fillMaxWidth()) {
         Text("📍 ${SystemTimezoneSetter.deviceInfo()}",
             fontSize = 11.sp, color = Color.Gray)
-        Text("v3 · 时区离线 · 定位API+缓存 (${LocationCache.size(context)} 条)",
+        Text("v3.2 · 时区离线 · 定位离线 (${OfflineGeoLookup.totalEntries(context)} 条)",
             fontSize = 11.sp, color = Color.Gray)
     }
 }
