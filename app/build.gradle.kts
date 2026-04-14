@@ -15,11 +15,26 @@ android {
         versionName = "3.0"
     }
 
+    // 固定签名：用仓库里提交的 keystore
+    // 这样 GitHub Actions 每次编译出的 APK 签名完全一致，
+    // 可以用 `adb install -r` 无痛升级，Device Owner 状态保留。
+    signingConfigs {
+        create("shared") {
+            storeFile = file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
 
@@ -46,10 +61,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // 网络
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // 协程
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

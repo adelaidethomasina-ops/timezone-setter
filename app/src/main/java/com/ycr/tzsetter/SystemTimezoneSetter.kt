@@ -105,4 +105,31 @@ object SystemTimezoneSetter {
 
     val grantPermissionCommand: String
         get() = "adb shell pm grant $PACKAGE_NAME android.permission.SET_TIME_ZONE"
+
+    /**
+     * 解除 Device Owner 身份。成功后本 app 可以被普通卸载，
+     * 也可以用新签名的 APK 覆盖安装。
+     *
+     * 调用者必须确认这是 Device Owner app，且用户确实想解除。
+     * 一旦解除，需要清账户 + ADB 重新设置才能恢复特权。
+     */
+    fun clearDeviceOwner(context: Context): Result {
+        if (!isDeviceOwner(context)) {
+            return Result.Error("当前不是 Device Owner，无需解除")
+        }
+        return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            dpm.clearDeviceOwnerApp(context.packageName)
+            // 校验
+            if (isDeviceOwner(context)) {
+                Result.Error("系统未接受解除请求")
+            } else {
+                Result.Success("cleared", "DEVICE_OWNER_CLEARED")
+            }
+        } catch (e: SecurityException) {
+            Result.Error("无权解除：${e.message}")
+        } catch (e: Exception) {
+            Result.Error(e.message ?: e.javaClass.simpleName)
+        }
+    }
 }

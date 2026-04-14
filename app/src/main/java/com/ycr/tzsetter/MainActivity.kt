@@ -194,6 +194,9 @@ fun AppScreen() {
                 tzApplyResult?.let { TzApplyResultCard(it) { showAuthGuide = true } }
             }
 
+            if (authMode == SystemTimezoneSetter.AuthMode.DEVICE_OWNER) {
+                DangerZoneCard()
+            }
             Spacer(Modifier.height(24.dp))
             FooterText(context)
         }
@@ -678,4 +681,61 @@ private fun copyToClipboard(context: Context, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("adb command", text))
     android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+fun DangerZoneCard() {
+    val context = LocalContext.current
+    var showConfirm by remember { mutableStateOf(false) }
+    var showResult by remember { mutableStateOf<String?>(null) }
+
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("⚠️ 危险操作",
+                fontWeight = FontWeight.Bold, color = Color(0xFF5D4037), fontSize = 13.sp)
+            Text("下面的按钮用于升级 app 前解除 Device Owner 身份。\n" +
+                "解除后可用新签名的 APK 覆盖安装，但需要重新 ADB 配置才能恢复自动能力。",
+                fontSize = 11.sp, color = Color(0xFF795548))
+            OutlinedButton(
+                onClick = { showConfirm = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315))
+            ) {
+                Text("解除 Device Owner（升级前用）", fontSize = 12.sp)
+            }
+            showResult?.let { msg ->
+                Text(msg, fontSize = 11.sp, color = Color(0xFF4E342E))
+            }
+        }
+    }
+
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            title = { Text("确认解除 Device Owner？") },
+            text = {
+                Text("解除后：\n" +
+                    "· 本 app 将失去自动改时区 / 自动配置定位的权限\n" +
+                    "· 但可以用 adb uninstall 正常卸载\n" +
+                    "· 以及用新签名的 APK 覆盖安装\n\n" +
+                    "通常只在升级到新版本时才需要这样做。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val r = SystemTimezoneSetter.clearDeviceOwner(context)
+                    showResult = when (r) {
+                        is SystemTimezoneSetter.Result.Success ->
+                            "✓ 已解除。现在可以 adb uninstall 本 app 了。"
+                        is SystemTimezoneSetter.Result.Error -> "✗ 失败：${r.message}"
+                        is SystemTimezoneSetter.Result.PermissionDenied -> "✗ 无权限"
+                    }
+                    showConfirm = false
+                }) { Text("确认解除", color = Color(0xFFD32F2F)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }) { Text("取消") }
+            }
+        )
+    }
 }
