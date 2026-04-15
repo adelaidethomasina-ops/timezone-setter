@@ -129,8 +129,9 @@ fun AppScreen() {
                     scope.launch {
                         val countryCode =
                             if (tz.country == ZipTimezoneLookup.Country.US) "us" else "ca"
+                        // US 邮编补齐 5 位（前导零）
                         val queryZip = if (tz.country == ZipTimezoneLookup.Country.US)
-                            tz.normalized.take(5)
+                            tz.normalized.take(5).padStart(5, '0')
                         else
                             tz.normalized.take(3)
 
@@ -159,20 +160,27 @@ fun AppScreen() {
                             return@launch
                         }
 
-                        // 3. 网络兜底（本地数据覆盖率 99%+，这里基本不会触发）
-                        val fetched = try {
+                        // 3. 网络兜底
+                        combined = combined?.copy(
+                            geoError = "离线库无此邮编，正在联网查询..."
+                        )
+                        val (fetched, netErr) = try {
                             withContext(Dispatchers.IO) {
-                                NetworkDataSource.fetch(countryCode, queryZip)
+                                NetworkDataSource.fetch(countryCode, queryZip) to null
                             }
+                        } catch (e: java.net.UnknownHostException) {
+                            null to "无网络，请打开网络连接后重试"
+                        } catch (e: java.net.SocketTimeoutException) {
+                            null to "网络超时，请重试"
                         } catch (e: Exception) {
-                            null
+                            null to "网络错误：${e.message ?: e.javaClass.simpleName}"
                         }
                         if (fetched != null) {
                             LocationCache.put(context, countryCode, queryZip, fetched)
-                            combined = combined?.copy(geo = fetched)
+                            combined = combined?.copy(geo = fetched, geoError = null)
                         } else {
                             combined = combined?.copy(
-                                geoError = "未查到经纬度。时区仍可使用。"
+                                geoError = netErr ?: "API 无此邮编（可能是 PO Box 或军邮）。时区仍可使用。"
                             )
                         }
                         isLoading = false
@@ -241,6 +249,11 @@ fun AuthStatusCard(mode: SystemTimezoneSetter.AuthMode, onClick: () -> Unit) {
             Color(0xFFE3F2FD), Color(0xFF0D47A1),
             "时区：普通权限模式",
             "可尝试修改系统时区"
+        )
+        SystemTimezoneSetter.AuthMode.ACCESSIBILITY -> Quad(
+            Color(0xFFE3F2FD), Color(0xFF0D47A1),
+            "时区：无障碍辅助模式",
+            "通过自动操作系统设置改时区（3-5 秒）"
         )
         SystemTimezoneSetter.AuthMode.NONE -> Quad(
             Color(0xFFFFF3E0), Color(0xFFE65100),
@@ -600,6 +613,23 @@ fun AuthGuideDialog(onDismiss: () -> Unit) {
                 Text("方案二：普通权限（部分 ROM）",
                     fontWeight = FontWeight.Bold, color = Color(0xFF546E7A))
                 CopyableCommand(SystemTimezoneSetter.grantPermissionCommand, context)
+
+                Spacer(Modifier.height(8.dp))
+                Text("方案三：无障碍服务（不能 Root 也不能设 DO 时用）",
+                    fontWeight = FontWeight.Bold, color = Color(0xFF00897B))
+                Text("适用于一加 ColorOS / 小米 MIUI 等限制严的国产 ROM。" +
+                    "授权后 app 会自动跳转系统设置，模拟点击改时区，约 3-5 秒完成。",
+                    fontSize = 12.sp, color = Color(0xFF555555))
+                Button(
+                    onClick = {
+                        TimezoneAccessibilityService.openAccessibilitySettings(context)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                ) { Text("打开无障碍设置 → 启用「时区助手」") }
+                Text("路径：系统设置 → 无障碍 → 已下载的服务 → 时区助手 → 打开",
+                    fontSize = 11.sp, color = Color.Gray)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("我知道了") } }
