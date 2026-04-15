@@ -80,6 +80,14 @@ fun AppScreen() {
             authMode = SystemTimezoneSetter.getAuthMode(context)
             mockStatus = MockLocationController.getStatus(context)
             mockRunning = MockLocationService.isRunning
+            // 无障碍模式：检测 lastStatus，若已完成则替换 tzApplyResult
+            val r = tzApplyResult
+            if (r is SystemTimezoneSetter.Result.Success && r.via.startsWith("ACCESSIBILITY")) {
+                val a11yStatus = TimezoneAccessibilityService.lastStatus
+                if (a11yStatus.startsWith("✓") || a11yStatus.startsWith("\u2713")) {
+                    tzApplyResult = SystemTimezoneSetter.Result.Success(r.tzId, "ACCESSIBILITY ($a11yStatus)")
+                }
+            }
             kotlinx.coroutines.delay(1500)
         }
     }
@@ -717,11 +725,16 @@ fun StepText(num: String, title: String, detail: String) {
 
 @Composable
 fun FooterText(context: Context) {
+    val versionName = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+        } catch (e: Exception) { "?" }
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth()) {
         Text("📍 ${SystemTimezoneSetter.deviceInfo()}",
             fontSize = 11.sp, color = Color.Gray)
-        Text("v3.2 · 时区离线 · 定位离线 (${OfflineGeoLookup.totalEntries(context)} 条)",
+        Text("v$versionName · 时区离线 · 定位离线 (${OfflineGeoLookup.totalEntries(context)} 条)",
             fontSize = 11.sp, color = Color.Gray)
     }
 }
