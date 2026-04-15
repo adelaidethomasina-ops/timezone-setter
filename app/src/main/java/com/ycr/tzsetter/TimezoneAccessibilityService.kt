@@ -251,15 +251,25 @@ class TimezoneAccessibilityService : AccessibilityService() {
         // 第一步：还没输入过 → 找输入框 EditText 输入
         if (!searchInputDone) {
             val editText = findEditText(root)
-            if (editText != null) {
-                val firstName = cityNames.firstOrNull() ?: return
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        firstName
-                    )
-                }
-                editText.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (editText == null) {
+                Log.w(TAG, "Search: no EditText/AutoComplete found yet")
+                return
+            }
+            Log.i(TAG, "Search: found editable cls=${editText.className} rid=${editText.viewIdResourceName}")
+            val firstName = cityNames.firstOrNull() ?: return
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    firstName
+                )
+            }
+            val ok = editText.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            Log.i(TAG, "Search: SET_TEXT result=$ok text=$firstName")
+            if (!ok) {
+                Log.w(TAG, "SET_TEXT failed, will retry later")
+                return
+            }
+            run {
                 searchInputDone = true
                 lastStatus = "搜索：$firstName"
                 Log.i(TAG, "Set search text: $firstName")
@@ -369,11 +379,28 @@ class TimezoneAccessibilityService : AccessibilityService() {
     }
 
     private fun findEditText(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        // 优先：用 resource-id "search_src_text" 直接定位（ColorOS / AOSP 标准 ID）
+        try {
+            val byId = root.findAccessibilityNodeInfosByViewId("android:id/search_src_text")
+            if (!byId.isNullOrEmpty()) return byId[0]
+            val byId2 = root.findAccessibilityNodeInfosByViewId("com.android.settings:id/search_src_text")
+            if (!byId2.isNullOrEmpty()) return byId2[0]
+        } catch (e: Exception) { /* ignore */ }
+
+        // 退而求其次：递归找 EditText 或 AutoCompleteTextView
+        return findEditableRecursive(root)
+    }
+
+    private fun findEditableRecursive(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val cls = root.className?.toString() ?: ""
-        if (cls.contains("EditText", ignoreCase = true)) return root
+        if (cls.contains("EditText", ignoreCase = true) ||
+            cls.contains("AutoCompleteTextView", ignoreCase = true) ||
+            root.isEditable) {
+            return root
+        }
         for (i in 0 until root.childCount) {
             val child = root.getChild(i) ?: continue
-            val found = findEditText(child)
+            val found = findEditableRecursive(child)
             if (found != null) return found
         }
         return null
