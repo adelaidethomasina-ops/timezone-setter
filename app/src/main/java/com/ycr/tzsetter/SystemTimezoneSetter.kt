@@ -46,26 +46,28 @@ object SystemTimezoneSetter {
     }
 
     /**
-     * 改系统时区。先尝试 DO 路径，失败再尝试 AlarmManager。
-     * 不依赖 isDeviceOwner() 的返回值，直接"盲试"。
+     * 改系统时区。优先级：
+     *   1. Device Owner（最快，瞬间静默改）
+     *   2. AlarmManager（部分宽松 ROM）
+     *   3. **无障碍服务自动操作系统设置 UI**（一加 ColorOS 等严格 ROM）
+     *   4. 都不行 → PermissionDenied
      */
     fun setSystemTimezone(context: Context, tzId: String): Result {
-        // 盲试 1：Device Owner API（如果不是 DO 会抛 SecurityException，没关系往下走）
+        // 路径 1：Device Owner API
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
                 val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                 val admin = ComponentName(context, TimezoneAdminReceiver::class.java)
                 val ok = dpm.setTimeZone(admin, tzId)
                 if (ok) return Result.Success(tzId, "DEVICE_OWNER")
-                // 返回 false 但没异常，继续尝试 AlarmManager
             } catch (e: SecurityException) {
-                // 不是 DO，降级
+                // 不是 DO，往下
             } catch (e: Exception) {
-                // 其他异常，降级
+                // 其他异常，往下
             }
         }
 
-        // 盲试 2：AlarmManager.setTimeZone（normal 权限 or 某些 ROM 直接通过）
+        // 路径 2：AlarmManager
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             am.setTimeZone(tzId)
@@ -74,14 +76,20 @@ object SystemTimezoneSetter {
                     .hasSameRules(java.util.TimeZone.getTimeZone(tzId))) {
                 return Result.Success(tzId, "ALARM_MANAGER")
             }
+            // setTimeZone 不抛异常但实际没生效（ColorOS 静默拒绝）→ 走无障碍
         } catch (e: SecurityException) {
-            // 没权限，返回 PermissionDenied
-            return Result.PermissionDenied(tzId)
+            // 没权限，往下试无障碍
         } catch (e: Exception) {
-            return Result.Error(e.message ?: e.javaClass.simpleName)
+            // 其他异常，往下试无障碍
         }
 
-        // 两条路都走不通
+        // 路径 3：无障碍服务自动操作（关键路径）
+        if (TimezoneAccessibilityService.isEnabled(context)) {
+            TimezoneAccessibilityService.startAutomation(context, tzId)
+            return Result.Success(tzId, "ACCESSIBILITY (跳转系统设置中…)")
+        }
+
+        // 都走不通
         return Result.PermissionDenied(tzId)
     }
 
