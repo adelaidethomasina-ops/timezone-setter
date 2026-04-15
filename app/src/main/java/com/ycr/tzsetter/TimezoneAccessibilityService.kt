@@ -147,7 +147,7 @@ class TimezoneAccessibilityService : AccessibilityService() {
             !pkg.contains("android", ignoreCase = true)) return
 
         val now = System.currentTimeMillis()
-        if (now - lastTickMs < 250) return
+        if (now - lastTickMs < 100) return
         lastTickMs = now
 
         Handler(Looper.getMainLooper()).postDelayed({
@@ -193,6 +193,13 @@ class TimezoneAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Clicked 时区 entry")
         stage = STAGE_TZ_LIST
         searchInputDone = false
+        // 主动延迟扫描 (防止 ColorOS 在切换后没发事件)
+        Handler(Looper.getMainLooper()).postDelayed({
+            tryAutomate()
+        }, 1500)
+        Handler(Looper.getMainLooper()).postDelayed({
+            tryAutomate()
+        }, 3000)
     }
 
     /**
@@ -203,26 +210,35 @@ class TimezoneAccessibilityService : AccessibilityService() {
      *   - TextView text="搜索城市、国家" rid=animated_hint
      */
     private fun handleTzList(root: AccessibilityNodeInfo, tzId: String) {
-        // 必须真的看到了城市列表（含 GMT 字样）才算到达
-        if (!hasNodeWithText(root, "GMT") && !hasNodeWithText(root, "搜索城市")) {
+        // 检测：进入了时区选择页（有 GMT 字样、或"搜索"hint、或多个城市名）
+        val hasGmt = hasNodeWithText(root, "GMT")
+        val hasSearchHint = hasNodeWithText(root, "搜索")
+        val hasCityHint = hasNodeWithText(root, "搜索城市")
+        Log.i(TAG, "TzList check: hasGmt=$hasGmt hasSearchHint=$hasSearchHint hasCityHint=$hasCityHint")
+        if (!hasGmt && !hasSearchHint && !hasCityHint) {
             return
         }
 
-        // 找 hint 文本"搜索城市、国家"的节点
+        // 找搜索框 - 多个候选关键词
         val searchHint = findTextViewByPartialText(root, "搜索城市")
+            ?: findTextViewByPartialText(root, "搜索")
+            ?: findTextViewByPartialText(root, "Search")
         if (searchHint != null) {
-            // 找它的可点击祖先（animated_hint_layout）
             val clickable = findClickableAncestor(searchHint)
             if (clickable != null) {
                 clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 lastStatus = "已打开搜索框"
-                Log.i(TAG, "Clicked search box")
+                Log.i(TAG, "Clicked search box (hint=${searchHint.text ?: searchHint.contentDescription})")
                 stage = STAGE_SEARCH
                 return
+            } else {
+                Log.w(TAG, "Found search hint but no clickable ancestor")
             }
+        } else {
+            Log.w(TAG, "No search hint found, will try direct click")
         }
 
-        // 没找到搜索框？降级方案：直接在列表里找城市名
+        // 没搜索框 → 降级：直接在列表里找城市
         directClickInList(root, tzId)
     }
 
@@ -247,7 +263,13 @@ class TimezoneAccessibilityService : AccessibilityService() {
                 searchInputDone = true
                 lastStatus = "搜索：$firstName"
                 Log.i(TAG, "Set search text: $firstName")
-                // 等结果加载
+                // 等结果加载，主动重扫
+                Handler(Looper.getMainLooper()).postDelayed({
+                    tryAutomate()
+                }, 800)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    tryAutomate()
+                }, 1800)
                 return
             }
             return
