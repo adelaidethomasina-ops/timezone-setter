@@ -76,6 +76,7 @@ fun AppScreen() {
     var showAuthGuide by remember { mutableStateOf(false) }
     var showMockGuide by remember { mutableStateOf(false) }
     var showSuccessDialog by remember { mutableStateOf<String?>(null) }
+    var dialogDismissed by remember { mutableStateOf(false) }
 
     // 定时刷新状态
     LaunchedEffect(Unit) {
@@ -83,13 +84,15 @@ fun AppScreen() {
             authMode = SystemTimezoneSetter.getAuthMode(context)
             mockStatus = MockLocationController.getStatus(context)
             mockRunning = MockLocationService.isRunning
-            // 无障碍模式：检测 lastStatus，若已完成则替换 tzApplyResult
+            // 无障碍模式：检测 lastStatus，若已完成则替换 tzApplyResult（仅一次）
             val r = tzApplyResult
-            if (r is SystemTimezoneSetter.Result.Success && r.via.startsWith("ACCESSIBILITY")) {
+            if (r is SystemTimezoneSetter.Result.Success && r.via.startsWith("ACCESSIBILITY") && !r.via.contains("✓")) {
                 val a11yStatus = TimezoneAccessibilityService.lastStatus
                 if (a11yStatus.startsWith("✓") || a11yStatus.startsWith("\u2713")) {
                     tzApplyResult = SystemTimezoneSetter.Result.Success(r.tzId, "ACCESSIBILITY ($a11yStatus)")
-                    if (showSuccessDialog == null) {
+                    // 清掉 lastStatus 防止下次循环再次触发
+                    TimezoneAccessibilityService.lastStatus = ""
+                    if (!dialogDismissed) {
                         val locInfo = combined?.geo?.let { g -> "\n📍 ${g.placeName}, ${g.stateAbbrev}" } ?: ""
                         showSuccessDialog = "✓ 时区 + 定位 已设置\n🕐 ${r.tzId}$locInfo\n(通过无障碍辅助)"
                     }
@@ -126,6 +129,7 @@ fun AppScreen() {
                     zipInput = it
                     errorMsg = null
                     tzApplyResult = null
+                    dialogDismissed = false
                 },
                 onQuery = {
                     // 收起键盘
@@ -262,12 +266,12 @@ fun AppScreen() {
     // 成功弹窗
     showSuccessDialog?.let { msg ->
         AlertDialog(
-            onDismissRequest = { showSuccessDialog = null },
+            onDismissRequest = { showSuccessDialog = null; dialogDismissed = true },
             icon = { Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(48.dp)) },
             title = { Text("操作成功", fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20)) },
             text = { Text(msg, fontSize = 15.sp, lineHeight = 22.sp) },
             confirmButton = {
-                TextButton(onClick = { showSuccessDialog = null }) {
+                TextButton(onClick = { showSuccessDialog = null; dialogDismissed = true }) {
                     Text("好的", fontWeight = FontWeight.Bold)
                 }
             },
