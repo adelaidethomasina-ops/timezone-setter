@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -62,6 +63,7 @@ data class CombinedResult(
 fun AppScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     var zipInput by remember { mutableStateOf("") }
     var combined by remember { mutableStateOf<CombinedResult?>(null) }
@@ -73,6 +75,7 @@ fun AppScreen() {
     var mockRunning by remember { mutableStateOf(MockLocationService.isRunning) }
     var showAuthGuide by remember { mutableStateOf(false) }
     var showMockGuide by remember { mutableStateOf(false) }
+    var showSuccessDialog by remember { mutableStateOf<String?>(null) }
 
     // 定时刷新状态
     LaunchedEffect(Unit) {
@@ -86,6 +89,10 @@ fun AppScreen() {
                 val a11yStatus = TimezoneAccessibilityService.lastStatus
                 if (a11yStatus.startsWith("✓") || a11yStatus.startsWith("\u2713")) {
                     tzApplyResult = SystemTimezoneSetter.Result.Success(r.tzId, "ACCESSIBILITY ($a11yStatus)")
+                    if (showSuccessDialog == null) {
+                        val locInfo = combined?.geo?.let { g -> "\n📍 ${g.placeName}, ${g.stateAbbrev}" } ?: ""
+                        showSuccessDialog = "✓ 时区 + 定位 已设置\n🕐 ${r.tzId}$locInfo\n(通过无障碍辅助)"
+                    }
                 }
             }
             kotlinx.coroutines.delay(1500)
@@ -121,6 +128,8 @@ fun AppScreen() {
                     tzApplyResult = null
                 },
                 onQuery = {
+                    // 收起键盘
+                    focusManager.clearFocus()
                     // 1. 本地查时区
                     val tz = ZipTimezoneLookup.lookup(context, zipInput)
                     if (tz == null) {
@@ -204,7 +213,11 @@ fun AppScreen() {
                     isLoading = isLoading,
                     mockRunning = mockRunning,
                     onApplyTz = {
-                        tzApplyResult = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
+                        val result = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
+                        tzApplyResult = result
+                        if (result is SystemTimezoneSetter.Result.Success && !result.via.startsWith("ACCESSIBILITY")) {
+                            showSuccessDialog = "✓ 时区已设置\n${r.tz.timezoneId}"
+                        }
                     },
                     onApplyMock = {
                         r.geo?.let { g ->
@@ -212,15 +225,21 @@ fun AppScreen() {
                                 context, g.latitude, g.longitude,
                                 "${g.placeName}, ${g.stateAbbrev} ${g.zip}"
                             )
+                            showSuccessDialog = "✓ 定位已设置\n${g.placeName}, ${g.stateAbbrev}\n${String.format("%.4f", g.latitude)}°, ${String.format("%.4f", g.longitude)}°"
                         }
                     },
                     onApplyBoth = {
-                        tzApplyResult = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
+                        val result = SystemTimezoneSetter.setSystemTimezone(context, r.tz.timezoneId)
+                        tzApplyResult = result
                         r.geo?.let { g ->
                             MockLocationController.startMock(
                                 context, g.latitude, g.longitude,
                                 "${g.placeName}, ${g.stateAbbrev} ${g.zip}"
                             )
+                        }
+                        if (result is SystemTimezoneSetter.Result.Success && !result.via.startsWith("ACCESSIBILITY")) {
+                            val locInfo = r.geo?.let { g -> "\n📍 ${g.placeName}, ${g.stateAbbrev}" } ?: ""
+                            showSuccessDialog = "✓ 时区 + 定位 已设置\n🕐 ${r.tz.timezoneId}$locInfo"
                         }
                     },
                     onStopMock = { MockLocationController.stopMock(context) },
@@ -239,6 +258,22 @@ fun AppScreen() {
 
     if (showAuthGuide) AuthGuideDialog { showAuthGuide = false }
     if (showMockGuide) MockGuideDialog(context) { showMockGuide = false }
+
+    // 成功弹窗
+    showSuccessDialog?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { showSuccessDialog = null },
+            icon = { Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(48.dp)) },
+            title = { Text("操作成功", fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20)) },
+            text = { Text(msg, fontSize = 15.sp, lineHeight = 22.sp) },
+            confirmButton = {
+                TextButton(onClick = { showSuccessDialog = null }) {
+                    Text("好的", fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = Color(0xFFE8F5E9),
+        )
+    }
 }
 
 // ====================================================================

@@ -82,37 +82,107 @@ class TimezoneAccessibilityService : AccessibilityService() {
          */
         fun cityNamesForTimezone(tzId: String): List<String> {
             return when (tzId) {
-                "America/Los_Angeles" -> listOf("洛杉矶", "Los Angeles")
+                // ============ 美国本土 ============
+                // 东部时间 (ET)
                 "America/New_York" -> listOf("纽约", "New York")
+                "America/Detroit" -> listOf("底特律", "Detroit")
+                "America/Kentucky/Louisville" -> listOf("路易斯维尔", "Louisville")
+                "America/Kentucky/Monticello" -> listOf("蒙蒂塞洛", "Monticello")
+                "America/Indiana/Indianapolis" -> listOf("印第安纳波利斯", "Indianapolis")
+                "America/Indiana/Vincennes" -> listOf("温森斯", "Vincennes")
+                "America/Indiana/Winamac" -> listOf("威纳马克", "Winamac")
+                "America/Indiana/Marengo" -> listOf("马伦戈", "Marengo")
+                "America/Indiana/Petersburg" -> listOf("彼得斯堡", "Petersburg")
+                "America/Indiana/Vevay" -> listOf("维韦", "Vevay")
+                "America/Indiana/Tell_City" -> listOf("特尔市", "Tell City")
+                "America/Indiana/Knox" -> listOf("诺克斯", "Knox")
+
+                // 中部时间 (CT)
                 "America/Chicago" -> listOf("芝加哥", "Chicago")
+                "America/Menominee" -> listOf("梅诺米尼", "Menominee")
+                "America/North_Dakota/Center" -> listOf("森特", "Center")
+                "America/North_Dakota/New_Salem" -> listOf("新塞勒姆", "New Salem")
+                "America/North_Dakota/Beulah" -> listOf("比尤拉", "Beulah")
+
+                // 山地时间 (MT)
                 "America/Denver" -> listOf("丹佛", "Denver")
-                "America/Phoenix" -> listOf("凤凰城", "Phoenix")
+                "America/Boise" -> listOf("博伊西", "Boise")
+
+                // 亚利桑那 (无 DST)
+                "America/Phoenix" -> listOf("菲尼克斯", "凤凰城", "Phoenix")
+
+                // 太平洋时间 (PT)
+                "America/Los_Angeles" -> listOf("洛杉矶", "Los Angeles")
+
+                // 阿拉斯加时间 (AKT)
                 "America/Anchorage" -> listOf("安克雷奇", "Anchorage")
+                "America/Juneau" -> listOf("朱诺", "Juneau")
+                "America/Sitka" -> listOf("锡特卡", "Sitka")
+                "America/Yakutat" -> listOf("亚库塔特", "Yakutat")
+                "America/Nome" -> listOf("诺姆", "Nome")
+                "America/Metlakatla" -> listOf("梅特拉卡特拉", "Metlakatla")
+
+                // 夏威夷-阿留申时间
                 "America/Adak" -> listOf("埃达克", "Adak")
                 "Pacific/Honolulu" -> listOf("檀香山", "火奴鲁鲁", "Honolulu")
-                "America/Detroit" -> listOf("底特律", "Detroit")
-                "America/Boise" -> listOf("博伊西", "Boise")
-                "America/Indiana/Indianapolis" -> listOf("印第安纳波利斯", "Indianapolis")
-                "America/Menominee" -> listOf("梅诺米尼", "Menominee")
-                "America/Toronto" -> listOf("多伦多", "Toronto")
-                "America/Vancouver" -> listOf("温哥华", "Vancouver")
-                "America/Edmonton" -> listOf("埃德蒙顿", "Edmonton")
-                "America/Winnipeg" -> listOf("温尼伯", "Winnipeg")
-                "America/Halifax" -> listOf("哈利法克斯", "Halifax")
-                "America/St_Johns" -> listOf("圣约翰斯", "St. Johns")
-                "America/Regina" -> listOf("里贾纳", "Regina")
-                "America/Iqaluit" -> listOf("伊魁特", "Iqaluit")
-                "America/Cambridge_Bay" -> listOf("剑桥湾", "Cambridge Bay")
-                "America/Rankin_Inlet" -> listOf("兰金因莱特", "Rankin Inlet")
-                "America/Rainy_River" -> listOf("雷尼河", "Rainy River")
-                "America/Whitehorse" -> listOf("怀特霍斯", "Whitehorse")
-                "America/Yellowknife" -> listOf("耶洛奈夫", "Yellowknife")
-                "America/Moncton" -> listOf("蒙克顿", "Moncton")
-                "America/St_Thomas" -> listOf("圣托马斯", "St. Thomas")
-                "America/Puerto_Rico" -> listOf("波多黎各", "Puerto Rico", "圣胡安")
+
+                // ============ 美国海外领地 ============
+                "Pacific/Pago_Pago" -> listOf("帕果-帕果", "帕果帕果", "Pago Pago")
                 "Pacific/Guam" -> listOf("关岛", "Guam")
-                "Pacific/Pago_Pago" -> listOf("帕果帕果", "Pago Pago")
-                "Pacific/Saipan" -> listOf("塞班", "Saipan")
+                "America/Puerto_Rico" -> listOf("圣胡安", "波多黎各", "San Juan", "Puerto Rico")
+                "America/Virgin" -> listOf("圣托马斯", "维尔京群岛", "St. Thomas", "Virgin Islands")
+                "Pacific/Wake" -> listOf("威克岛", "Wake")
+                "Pacific/Midway" -> listOf("中途岛环礁", "中途岛", "Midway")
+
+                // ============ 加拿大 ============
+                // 纽芬兰时间 (NT)
+                "America/St_Johns" -> listOf("圣约翰斯", "St. John's", "St Johns")
+
+                // 大西洋时间 (AT)
+                "America/Halifax" -> listOf("哈利法克斯", "Halifax")
+                "America/Moncton" -> listOf("蒙克顿", "Moncton")
+                "America/Glace_Bay" -> listOf("格莱斯贝", "Glace Bay")
+                "America/Goose_Bay" -> listOf("古斯湾", "Goose Bay")
+
+                // 东部时间 (ET)
+                "America/Toronto" -> listOf("多伦多", "Toronto")
+                "America/Nipigon" -> listOf("尼皮贡", "Nipigon")
+                "America/Thunder_Bay" -> listOf("桑德贝", "Thunder Bay")
+                "America/Iqaluit" -> listOf("伊魁特", "Iqaluit")
+                "America/Pangnirtung" -> listOf("庞纳唐", "Pangnirtung")
+
+                // 中部时间 (CT)
+                "America/Winnipeg" -> listOf("温尼伯", "Winnipeg")
+                "America/Rainy_River" -> listOf("雷尼河", "Rainy River")
+                "America/Resolute" -> listOf("里索柳特", "Resolute")
+                "America/Rankin_Inlet" -> listOf("兰金因莱特", "Rankin Inlet")
+
+                // 中部标准时间 (无 DST)
+                "America/Regina" -> listOf("里贾纳", "Regina")
+                "America/Swift_Current" -> listOf("斯威夫特卡伦特", "Swift Current")
+
+                // 山地时间 (MT)
+                "America/Edmonton" -> listOf("埃德蒙顿", "Edmonton")
+                "America/Cambridge_Bay" -> listOf("剑桥湾", "Cambridge Bay")
+                "America/Yellowknife" -> listOf("耶洛奈夫", "Yellowknife")
+                "America/Inuvik" -> listOf("伊努维克", "Inuvik")
+
+                // 太平洋时间 (PT)
+                "America/Vancouver" -> listOf("温哥华", "Vancouver")
+
+                // 山地标准时间 (无 DST)
+                "America/Dawson_Creek" -> listOf("道森克里克", "Dawson Creek")
+                "America/Creston" -> listOf("克雷斯顿", "Creston")
+                "America/Fort_Nelson" -> listOf("纳尔逊堡", "Fort Nelson")
+
+                // 太平洋标准时间 (无 DST)
+                "America/Dawson" -> listOf("道森", "道森克里克", "Dawson")
+                "America/Whitehorse" -> listOf("怀特霍斯", "Whitehorse")
+
+                // 中部 (安大略西部)
+                "America/Atikokan" -> listOf("阿蒂科肯", "Atikokan")
+
+                // ============ 兜底 ============
                 else -> {
                     val tail = tzId.substringAfterLast("/").replace("_", " ")
                     listOf(tail)

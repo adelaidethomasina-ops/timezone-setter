@@ -11,8 +11,8 @@ android {
         applicationId = "com.ycr.tzsetter"
         minSdk = 24
         targetSdk = 34
-        versionCode = 11
-        versionName = "3.5.3"
+        versionCode = 13
+        versionName = "3.7"
     }
 
     // 固定签名：用仓库里提交的 keystore
