@@ -229,7 +229,9 @@ fun AppScreen() {
                                 context, g.latitude, g.longitude,
                                 "${g.placeName}, ${g.stateAbbrev} ${g.zip}"
                             )
-                            showSuccessDialog = "✓ 定位已设置\n${g.placeName}, ${g.stateAbbrev}\n${String.format("%.4f", g.latitude)}°, ${String.format("%.4f", g.longitude)}°"
+                            val lat = "%.4f".format(g.latitude)
+                            val lng = "%.4f".format(g.longitude)
+                            showSuccessDialog = "✓ 定位已设置\n${g.placeName}, ${g.stateAbbrev}\n${lat}°, ${lng}°"
                         }
                     },
                     onApplyBoth = {
