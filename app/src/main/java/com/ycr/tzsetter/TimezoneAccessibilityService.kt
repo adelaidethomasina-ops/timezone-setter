@@ -36,7 +36,6 @@ class TimezoneAccessibilityService : AccessibilityService() {
         @Volatile var isRunning: Boolean = false
             private set
         @Volatile var lastStatus: String = ""
-            private set
         @Volatile private var inOperation: Boolean = false
 
         /** 检查无障碍服务是否被用户启用 */
